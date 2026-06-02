@@ -28,6 +28,8 @@ sudo ./install.sh
 - 可访问 GitHub release
 - 支持的包管理器之一：`apt-get`、`dnf`、`yum`、`zypper`、`pacman`
 
+除 `sudo`/root 提权外，脚本会检查运行所需命令，并按当前包管理器自动补装缺失的最小依赖包。
+
 脚本会根据 CPU 架构选择官方 Linux 二进制包，支持常见的 `x86_64`、`aarch64/arm64`、`armv7`、`arm`、`i686`、`loongarch64`、`mips`、`mipsel`、`mips64el`、`riscv64`。
 
 ## 安装时会询问什么

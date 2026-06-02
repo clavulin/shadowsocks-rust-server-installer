@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-SCRIPT_NAME=$(basename "$0")
+SCRIPT_NAME="${0##*/}"
 REPO_API_BASE="https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases"
 BIN_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/shadowsocks-rust"
@@ -54,14 +54,11 @@ on_error() {
   exit "${exit_code}"
 }
 
-trap cleanup EXIT
-trap on_error ERR
-
 main() {
   require_root
   require_systemd
-  detect_firewall_manager
   install_prerequisites
+  detect_firewall_manager
   collect_inputs
   fetch_release_metadata
   choose_release_asset
@@ -97,8 +94,38 @@ require_systemd() {
 
 install_prerequisites() {
   local missing=()
-  local required=(curl tar sed grep install mktemp sha256sum getent useradd groupadd)
+  local packages=()
+  local unmapped=()
+  local required=(
+    base64
+    cat
+    chmod
+    chown
+    cp
+    curl
+    date
+    find
+    getent
+    grep
+    groupadd
+    head
+    id
+    install
+    mkdir
+    mktemp
+    rm
+    sed
+    sha256sum
+    tail
+    tar
+    tr
+    uname
+    useradd
+    xz
+  )
   local cmd
+  local manager
+  local package
 
   for cmd in "${required[@]}"; do
     if ! command -v "${cmd}" >/dev/null 2>&1; then
@@ -110,24 +137,142 @@ install_prerequisites() {
     return
   fi
 
-  log_info "Installing prerequisites: ${missing[*]}"
-
-  if command -v apt-get >/dev/null 2>&1; then
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y ca-certificates curl tar xz-utils
-  elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y ca-certificates curl tar xz
-  elif command -v yum >/dev/null 2>&1; then
-    yum install -y ca-certificates curl tar xz
-  elif command -v zypper >/dev/null 2>&1; then
-    zypper --non-interactive install ca-certificates curl tar xz
-  elif command -v pacman >/dev/null 2>&1; then
-    pacman -Sy --noconfirm ca-certificates curl tar xz
-  else
-    log_error "Could not install missing prerequisites automatically. Missing: ${missing[*]}"
+  manager=$(detect_package_manager)
+  if [[ -z "${manager}" ]]; then
+    log_error "Could not install missing prerequisites automatically. Missing commands: $(join_words "${missing[@]}")"
     exit 1
   fi
+
+  for cmd in "${missing[@]}"; do
+    package=$(package_for_command "${manager}" "${cmd}")
+    if [[ -z "${package}" ]]; then
+      unmapped+=("${cmd}")
+    else
+      add_unique_package "${package}"
+    fi
+  done
+
+  if [[ "${#unmapped[@]}" -gt 0 ]]; then
+    log_error "No package mapping for missing commands on ${manager}: $(join_words "${unmapped[@]}")"
+    exit 1
+  fi
+
+  log_info "Missing commands: $(join_words "${missing[@]}")"
+  log_info "Installing minimal prerequisite packages with ${manager}: $(join_words "${packages[@]}")"
+
+  case "${manager}" in
+    apt)
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y "${packages[@]}"
+      ;;
+    dnf)
+      dnf install -y "${packages[@]}"
+      ;;
+    yum)
+      yum install -y "${packages[@]}"
+      ;;
+    zypper)
+      zypper --non-interactive install "${packages[@]}"
+      ;;
+    pacman)
+      pacman -Sy --noconfirm "${packages[@]}"
+      ;;
+    *)
+      log_error "Unsupported package manager: ${manager}"
+      exit 1
+      ;;
+  esac
+
+  missing=()
+  for cmd in "${required[@]}"; do
+    if ! command -v "${cmd}" >/dev/null 2>&1; then
+      missing+=("${cmd}")
+    fi
+  done
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    log_error "Prerequisites are still missing after package installation: $(join_words "${missing[@]}")"
+    exit 1
+  fi
+}
+
+join_words() {
+  local IFS=' '
+  printf '%s' "$*"
+}
+
+detect_package_manager() {
+  if command -v apt-get >/dev/null 2>&1; then
+    printf '%s' "apt"
+  elif command -v dnf >/dev/null 2>&1; then
+    printf '%s' "dnf"
+  elif command -v yum >/dev/null 2>&1; then
+    printf '%s' "yum"
+  elif command -v zypper >/dev/null 2>&1; then
+    printf '%s' "zypper"
+  elif command -v pacman >/dev/null 2>&1; then
+    printf '%s' "pacman"
+  fi
+}
+
+package_for_command() {
+  local manager="$1"
+  local cmd="$2"
+
+  case "${cmd}" in
+    base64|cat|chmod|chown|cp|date|head|id|install|mkdir|mktemp|rm|sha256sum|tail|tr|uname)
+      printf '%s' "coreutils"
+      ;;
+    curl)
+      printf '%s' "curl"
+      ;;
+    find)
+      printf '%s' "findutils"
+      ;;
+    getent)
+      case "${manager}" in
+        apt) printf '%s' "libc-bin" ;;
+        dnf|yum) printf '%s' "glibc-common" ;;
+        zypper|pacman) printf '%s' "glibc" ;;
+      esac
+      ;;
+    grep)
+      printf '%s' "grep"
+      ;;
+    groupadd|useradd)
+      case "${manager}" in
+        apt) printf '%s' "passwd" ;;
+        dnf|yum) printf '%s' "shadow-utils" ;;
+        zypper|pacman) printf '%s' "shadow" ;;
+      esac
+      ;;
+    sed)
+      printf '%s' "sed"
+      ;;
+    tar)
+      printf '%s' "tar"
+      ;;
+    xz)
+      case "${manager}" in
+        apt) printf '%s' "xz-utils" ;;
+        dnf|yum|zypper|pacman) printf '%s' "xz" ;;
+      esac
+      ;;
+  esac
+}
+
+add_unique_package() {
+  local package="$1"
+  local existing
+
+  for existing in "${packages[@]}"; do
+    if [[ "${existing}" == "${package}" ]]; then
+      return
+    fi
+  done
+
+  packages+=("${package}")
 }
 
 collect_inputs() {
@@ -577,16 +722,16 @@ select_method() {
   local manual_option=0
 
   while true; do
-    printf '\nCommon cipher methods supported by shadowsocks-rust:\n'
+    printf '\nCommon cipher methods supported by shadowsocks-rust:\n' >&2
     index=1
     for entry in "${COMMON_METHODS[@]}"; do
       method=${entry%%|*}
       description=${entry#*|}
-      printf '  %d) %s\n     %s\n' "${index}" "${method}" "${description}"
+      printf '  %d) %s\n     %s\n' "${index}" "${method}" "${description}" >&2
       index=$((index + 1))
     done
     manual_option=${index}
-    printf '  %d) Manual input\n' "${manual_option}"
+    printf '  %d) Manual input\n' "${manual_option}" >&2
 
     read -r -p "Select cipher method [1]: " choice
     choice=${choice:-1}
@@ -749,4 +894,8 @@ log_error() {
   printf '[ERROR] %s\n' "$*" >&2
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  trap cleanup EXIT
+  trap on_error ERR
+  main "$@"
+fi
