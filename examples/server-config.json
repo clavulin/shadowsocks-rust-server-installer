@@ -1,0 +1,8 @@
+{
+  "server": "::",
+  "server_port": 8388,
+  "password": "REPLACE_ME",
+  "method": "2022-blake3-aes-128-gcm",
+  "mode": "tcp_and_udp",
+  "timeout": 300
+}
