@@ -116,6 +116,7 @@ install_prerequisites() {
     rm
     sed
     sha256sum
+    sleep
     tail
     tar
     tr
@@ -221,7 +222,7 @@ package_for_command() {
   local cmd="$2"
 
   case "${cmd}" in
-    base64|cat|chmod|chown|cp|date|head|id|install|mkdir|mktemp|rm|sha256sum|tail|tr|uname)
+    base64|cat|chmod|chown|cp|date|head|id|install|mkdir|mktemp|rm|sha256sum|sleep|tail|tr|uname)
       printf '%s' "coreutils"
       ;;
     curl)
@@ -406,6 +407,7 @@ write_server_config() {
   local backup_suffix
 
   mkdir -p "${CONFIG_DIR}"
+  chown root:"${SERVICE_USER}" "${CONFIG_DIR}"
   chmod 0750 "${CONFIG_DIR}"
 
   if [[ -f "${CONFIG_PATH}" ]]; then
@@ -500,8 +502,19 @@ maybe_open_firewall() {
 enable_and_restart_service() {
   log_info "Reloading systemd and starting ${SERVICE_NAME}"
   systemctl daemon-reload
-  systemctl enable --now "${SERVICE_NAME}"
+  systemctl enable "${SERVICE_NAME}"
   systemctl restart "${SERVICE_NAME}"
+  sleep 1
+
+  if ! systemctl is-active --quiet "${SERVICE_NAME}"; then
+    systemctl --no-pager --full status "${SERVICE_NAME}" || true
+    if command -v journalctl >/dev/null 2>&1; then
+      journalctl -u "${SERVICE_NAME}" --no-pager -n 40 || true
+    fi
+    log_error "${SERVICE_NAME} failed to start."
+    exit 1
+  fi
+
   systemctl --no-pager --full status "${SERVICE_NAME}" | sed -n '1,12p'
 }
 
