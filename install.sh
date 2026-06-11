@@ -808,6 +808,7 @@ url_encode() {
   local output=""
   local index
   local char
+  local LC_ALL=C
 
   for (( index = 0; index < ${#value}; index += 1 )); do
     char="${value:index:1}"
