@@ -113,6 +113,7 @@ install_prerequisites() {
     install
     mkdir
     mktemp
+    od
     rm
     sed
     sha256sum
@@ -222,7 +223,7 @@ package_for_command() {
   local cmd="$2"
 
   case "${cmd}" in
-    base64|cat|chmod|chown|cp|date|head|id|install|mkdir|mktemp|rm|sha256sum|sleep|tail|tr|uname)
+    base64|cat|chmod|chown|cp|date|head|id|install|mkdir|mktemp|od|rm|sha256sum|sleep|tail|tr|uname)
       printf '%s' "coreutils"
       ;;
     curl)
@@ -806,22 +807,23 @@ json_escape() {
 url_encode() {
   local value="$1"
   local output=""
-  local index
-  local char
-  local LC_ALL=C
+  local byte=""
+  local char=""
 
-  for (( index = 0; index < ${#value}; index += 1 )); do
-    char="${value:index:1}"
-    case "${char}" in
-      [a-zA-Z0-9.~_-])
+  while IFS= read -r byte; do
+    case "${byte}" in
+      "")
+        continue
+        ;;
+      2d|2e|5f|7e|3[0-9]|4[1-9a-f]|5[0-9a]|6[1-9a-f]|7[0-9a])
+        printf -v char '%b' "\\x${byte}"
         output+="${char}"
         ;;
       *)
-        printf -v char_hex '%%%02X' "'${char}"
-        output+="${char_hex}"
+        output+="%${byte^^}"
         ;;
     esac
-  done
+  done < <(printf '%s' "${value}" | LC_ALL=C od -An -tx1 -v | tr -s '[:space:]' '\n')
 
   printf '%s' "${output}"
 }
