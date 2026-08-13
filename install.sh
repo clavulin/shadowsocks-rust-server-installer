@@ -284,7 +284,7 @@ collect_inputs() {
   LISTEN_ADDRESS=$(prompt_default "Bind address" "${DEFAULT_BIND_ADDRESS}")
   SERVER_PORT=$(prompt_default "Server port" "${DEFAULT_PORT}")
   METHOD=$(select_method)
-  PASSWORD=$(prompt_default "Password/key (blank = auto-generate with ssservice genkey)" "")
+  PASSWORD=$(prompt_password "${METHOD}")
   MODE=$(prompt_default "Traffic mode" "${DEFAULT_MODE}")
   TIMEOUT_SECONDS=$(prompt_default "Timeout in seconds" "${DEFAULT_TIMEOUT}")
   CONFIG_NAME=$(prompt_default "Node name for the summary link" "shadowsocks-rust")
@@ -382,6 +382,11 @@ ensure_supported_method() {
     log_warn "The installed ssservice build does not accept method: ${METHOD}"
     METHOD=$(select_method)
   done
+
+  if [[ -n "${PASSWORD}" ]] && ! validate_password_for_method "${METHOD}" "${PASSWORD}"; then
+    log_warn "The custom password/key must be replaced after selecting method: ${METHOD}"
+    PASSWORD=$(prompt_password "${METHOD}")
+  fi
 }
 
 ensure_service_account() {
@@ -706,6 +711,109 @@ validate_mode() {
       exit 1
       ;;
   esac
+}
+
+password_key_bytes() {
+  case "$1" in
+    2022-blake3-aes-128-gcm)
+      printf '%s' "16"
+      ;;
+    2022-blake3-aes-256-gcm|2022-blake3-chacha20-poly1305)
+      printf '%s' "32"
+      ;;
+  esac
+}
+
+validate_password_for_method() {
+  local method="$1"
+  local password="$2"
+  local expected_bytes=""
+  local expected_base64_length=0
+  local expected_padding=0
+  local normalized=""
+  local padding=""
+  local decode_value=""
+  local canonical=""
+
+  if [[ -z "${password}" ]]; then
+    log_warn "Custom password/key cannot be empty. Leave the prompt blank to generate a random value."
+    return 1
+  fi
+
+  if [[ "${password}" =~ [[:cntrl:]] ]]; then
+    log_warn "Password/key cannot contain control characters."
+    return 1
+  fi
+
+  expected_bytes=$(password_key_bytes "${method}")
+  if [[ -z "${expected_bytes}" ]]; then
+    if [[ "${method}" == 2022-* ]]; then
+      log_warn "Custom key validation is not available for AEAD 2022 method: ${method}. Leave it blank to generate a random key."
+      return 1
+    fi
+    return 0
+  fi
+
+  if [[ ! "${password}" =~ ^[A-Za-z0-9+/]+={0,2}$ ]]; then
+    log_warn "${method} requires a standard Base64 key that decodes to exactly ${expected_bytes} bytes."
+    return 1
+  fi
+
+  normalized=${password%%=*}
+  padding=${password#"${normalized}"}
+  expected_base64_length=$(( (expected_bytes * 8 + 5) / 6 ))
+  if (( ${#normalized} != expected_base64_length )); then
+    log_warn "${method} requires a standard Base64 key that decodes to exactly ${expected_bytes} bytes."
+    return 1
+  fi
+
+  expected_padding=$(( (4 - expected_base64_length % 4) % 4 ))
+  if (( ${#padding} > expected_padding )); then
+    log_warn "${method} has invalid Base64 padding."
+    return 1
+  fi
+
+  decode_value=${password}
+  while (( ${#decode_value} % 4 != 0 )); do
+    decode_value+='='
+  done
+
+  if ! canonical=$(printf '%s' "${decode_value}" | base64 -d 2>/dev/null | base64 | tr -d '\n='); then
+    log_warn "${method} requires a valid standard Base64 key."
+    return 1
+  fi
+
+  if [[ "${canonical}" != "${normalized}" ]]; then
+    log_warn "${method} requires a canonical standard Base64 key."
+    return 1
+  fi
+
+  return 0
+}
+
+prompt_password() {
+  local method="$1"
+  local reply=""
+
+  while true; do
+    if ! read -r -p "Password/key (blank = generate a random value): " reply; then
+      printf '\n' >&2
+      log_error "Password/key input was interrupted."
+      return 1
+    fi
+
+    if [[ -z "${reply}" ]]; then
+      printf '%s' ""
+      return 0
+    fi
+
+    if validate_password_for_method "${method}" "${reply}"; then
+      printf '%s' "${reply}"
+      return 0
+    fi
+
+    log_warn "Invalid password/key. Please try again, or leave it blank for a random value."
+  done
 }
 
 prompt_default() {
