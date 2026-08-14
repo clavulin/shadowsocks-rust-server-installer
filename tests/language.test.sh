@@ -52,21 +52,27 @@ assert_equal '已启用' "$(status_value_label 'enabled')" \
   'enabled service state should be localized in Chinese'
 assert_equal '未知' "$(status_value_label 'unknown')" \
   'unknown service state should be localized in Chinese'
-assert_equal '自定义(指定)入口监听IP/网卡接口 (客户端连接IP/网卡,回车默认全部监听 ::):' \
+assert_equal '监听地址（IP 地址或网卡接口；按回车键监听所有接口） [::]：' \
   "$(listen_address_prompt '::')" \
   'Chinese listen address prompt'
-assert_equal '自定义(指定)入口监听IP/网卡接口 (客户端连接IP/网卡,回车保持当前监听地址 192.0.2.10):' \
+assert_equal '监听地址（IP 地址或网卡接口；按回车键保留当前值） [192.0.2.10]：' \
   "$(listen_address_prompt '192.0.2.10')" \
   'Chinese listen address prompt with an existing custom value'
 assert_equal '::' "$(prompt_listen_address '::' <<< '')" \
   'blank listen address should use the default'
-assert_equal '192.0.2.10' "$(prompt_listen_address '::' <<< '192.0.2.10')" \
-  'custom listen address should be preserved'
+assert_equal '192.0.2.10' "$(prompt_listen_address '192.0.2.10' <<< '')" \
+  'blank listen address should preserve an existing custom value'
+assert_equal 'eth0' "$(prompt_listen_address '::' <<< 'eth0')" \
+  'custom network interface should be preserved'
 SCRIPT_LANG='en'
 assert_equal 'active' "$(status_value_label 'active')" \
   'English service state should remain unchanged'
-assert_equal 'Bind address [::]:' "$(listen_address_prompt '::')" \
-  'English listen address prompt should remain unchanged'
+assert_equal 'Listen address (IP address or network interface; press Enter for all interfaces) [::]:' \
+  "$(listen_address_prompt '::')" \
+  'English listen address prompt'
+assert_equal 'Listen address (IP address or network interface; press Enter to keep the current value) [192.0.2.10]:' \
+  "$(listen_address_prompt '192.0.2.10')" \
+  'English listen address prompt with an existing custom value'
 assert_equal 'n' "$(prompt_yes_no 'EOF default' 'n' </dev/null 2>/dev/null)" \
   'yes/no prompt should use the no default on end-of-input'
 assert_equal 'y' "$(prompt_yes_no 'EOF default' 'y' </dev/null 2>/dev/null)" \

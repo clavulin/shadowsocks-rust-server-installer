@@ -2326,14 +2326,14 @@ prompt_default() {
 listen_address_prompt() {
   local default_value="$1"
 
-  if [[ "${SCRIPT_LANG:-en}" == "zh" ]]; then
-    if [[ "${default_value}" == "${DEFAULT_BIND_ADDRESS}" ]]; then
-      printf '%s' "自定义(指定)入口监听IP/网卡接口 (客户端连接IP/网卡,回车默认全部监听 ${default_value}):"
-    else
-      printf '%s' "自定义(指定)入口监听IP/网卡接口 (客户端连接IP/网卡,回车保持当前监听地址 ${default_value}):"
-    fi
+  if [[ "${default_value}" == "${DEFAULT_BIND_ADDRESS}" ]]; then
+    l10n \
+      "Listen address (IP address or network interface; press Enter for all interfaces) [${default_value}]:" \
+      "监听地址（IP 地址或网卡接口；按回车键监听所有接口） [${default_value}]："
   else
-    printf '%s' "Bind address [${default_value}]:"
+    l10n \
+      "Listen address (IP address or network interface; press Enter to keep the current value) [${default_value}]:" \
+      "监听地址（IP 地址或网卡接口；按回车键保留当前值） [${default_value}]："
   fi
 }
 
