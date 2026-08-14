@@ -603,7 +603,7 @@ modify_config_action() {
   old_password="${PASSWORD}"
 
   printf '\n%s\n' "$(l10n "Modify Shadowsocks-rust configuration" "修改 Shadowsocks-rust 配置")"
-  LISTEN_ADDRESS=$(prompt_default "$(l10n "Bind address" "监听地址")" "${LISTEN_ADDRESS}")
+  LISTEN_ADDRESS=$(prompt_listen_address "${LISTEN_ADDRESS}")
   SERVER_PORT=$(prompt_default "$(l10n "Server port" "服务端口")" "${SERVER_PORT}")
   METHOD=$(prompt_default "$(l10n "Cipher method" "加密方法")" "${METHOD}")
   MODE=$(prompt_default "$(l10n "Traffic mode" "流量模式")" "${MODE}")
@@ -1236,7 +1236,7 @@ collect_inputs() {
   print_banner
 
   VERSION_INPUT=$(prompt_default "$(l10n "Version to install (blank = latest stable release)" "要安装的版本（留空 = 最新稳定版）")" "")
-  LISTEN_ADDRESS=$(prompt_default "$(l10n "Bind address" "监听地址")" "${DEFAULT_BIND_ADDRESS}")
+  LISTEN_ADDRESS=$(prompt_listen_address "${DEFAULT_BIND_ADDRESS}")
   SERVER_PORT=$(prompt_default "$(l10n "Server port" "服务端口")" "${DEFAULT_PORT}")
   METHOD=$(select_method)
   PASSWORD=$(prompt_password "${METHOD}")
@@ -2315,6 +2315,33 @@ prompt_default() {
   else
     read -r -p "${label}: " reply
   fi
+
+  if [[ -z "${reply}" ]]; then
+    printf '%s' "${default_value}"
+  else
+    printf '%s' "${reply}"
+  fi
+}
+
+listen_address_prompt() {
+  local default_value="$1"
+
+  if [[ "${SCRIPT_LANG:-en}" == "zh" ]]; then
+    if [[ "${default_value}" == "${DEFAULT_BIND_ADDRESS}" ]]; then
+      printf '%s' "自定义(指定)入口监听IP/网卡接口 (客户端连接IP/网卡,回车默认全部监听 ${default_value}):"
+    else
+      printf '%s' "自定义(指定)入口监听IP/网卡接口 (客户端连接IP/网卡,回车保持当前监听地址 ${default_value}):"
+    fi
+  else
+    printf '%s' "Bind address [${default_value}]:"
+  fi
+}
+
+prompt_listen_address() {
+  local default_value="$1"
+  local reply=""
+
+  read -r -p "$(listen_address_prompt "${default_value}") " reply
 
   if [[ -z "${reply}" ]]; then
     printf '%s' "${default_value}"
