@@ -101,4 +101,23 @@ ensure_supported_method <<< "${key_16_padded}" 2>/dev/null
 [[ "${METHOD}" == '2022-blake3-aes-128-gcm' ]] || fail 'unsupported method was not replaced'
 [[ "${PASSWORD}" == "${key_16_padded}" ]] || fail 'password was not revalidated after method replacement'
 
+# A binary that cannot run at all must abort instead of blaming every cipher
+# method and re-prompting forever.
+cat >"${mock_bin_dir}/ssservice" <<'EOF'
+#!/usr/bin/env bash
+
+printf '%s\n' "libc.so.6: version \`GLIBC_2.34' not found" >&2
+exit 1
+EOF
+chmod +x "${mock_bin_dir}/ssservice"
+
+METHOD='2022-blake3-aes-128-gcm'
+PASSWORD=''
+broken_output=$( (ensure_supported_method </dev/null) 2>&1 ) && \
+  fail 'a broken ssservice must not report success'
+[[ "${broken_output}" == *'GLIBC_2.34'* ]] || \
+  fail "broken ssservice error was not surfaced: ${broken_output}"
+[[ "${METHOD}" == '2022-blake3-aes-128-gcm' ]] || \
+  fail 'a broken ssservice must not rewrite the cipher method'
+
 printf 'password regression passed\n'

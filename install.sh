@@ -38,6 +38,7 @@ RELEASE_JSON=""
 ASSET_URL=""
 ASSET_NAME=""
 SHA256_URL=""
+REJECTED_ASSETS=()
 LISTEN_ADDRESS=""
 SERVER_PORT=""
 METHOD=""
@@ -89,8 +90,7 @@ install_action() {
   detect_firewall_manager
   collect_inputs
   fetch_release_metadata
-  choose_release_asset
-  download_and_verify_release
+  prepare_release
   install_binaries
   ensure_supported_method
   ensure_service_account
@@ -117,6 +117,7 @@ update_action() {
   local new_ssservice=""
   local staged_ssserver=""
   local staged_ssservice=""
+  local genkey_error=""
 
   require_installed
   install_prerequisites
@@ -124,8 +125,7 @@ update_action() {
 
   VERSION_INPUT=$(prompt_default "$(l10n "Version to install (blank = latest stable release)" "要安装的版本（留空 = 最新稳定版）")" "")
   fetch_release_metadata
-  choose_release_asset
-  download_and_verify_release
+  prepare_release
 
   new_ssserver=$(find_release_binary ssserver)
   new_ssservice=$(find_release_binary ssservice)
@@ -135,8 +135,11 @@ update_action() {
     log_error "$(l10n "The downloaded ssserver binary failed its version check." "下载的 ssserver 未通过版本检查。")"
     return 1
   fi
-  if ! "${new_ssservice}" genkey -m "${current_method}" >/dev/null 2>&1; then
+  if ! genkey_error=$(method_genkey_error "${new_ssservice}" "${current_method}"); then
     log_error "$(l10n "The downloaded release does not support the configured cipher method: ${current_method}" "下载的版本不支持当前加密方法：${current_method}")"
+    if [[ -n "${genkey_error}" ]]; then
+      log_error "$(l10n "Reason: $(first_line "${genkey_error}")" "原因：$(first_line "${genkey_error}")")"
+    fi
     return 1
   fi
 
@@ -1277,6 +1280,19 @@ fetch_release_metadata() {
   fi
 }
 
+asset_is_rejected() {
+  local candidate="$1"
+  local rejected
+
+  for rejected in ${REJECTED_ASSETS[@]+"${REJECTED_ASSETS[@]}"}; do
+    if [[ "${rejected}" == "${candidate}" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 choose_release_asset() {
   local -a candidates=()
   local candidate
@@ -1284,6 +1300,10 @@ choose_release_asset() {
   mapfile -t candidates < <(asset_candidates "${INSTALL_VERSION}")
 
   for candidate in "${candidates[@]}"; do
+    if asset_is_rejected "${candidate}"; then
+      continue
+    fi
+
     ASSET_URL=""
     if ASSET_URL=$(asset_url_from_release "${candidate}") && [[ -n "${ASSET_URL}" ]]; then
       ASSET_NAME="${candidate}"
@@ -1293,13 +1313,70 @@ choose_release_asset() {
     fi
   done
 
-  log_error "$(l10n "No compatible Linux asset was found for architecture $(uname -m)." "找不到适用于 $(uname -m) 架构的 Linux 发布文件。")"
+  if (( ${#REJECTED_ASSETS[@]} > 0 )); then
+    log_error "$(l10n "None of the release assets for architecture $(uname -m) can run on this system." "没有任何适用于 $(uname -m) 架构的发布文件能在本系统上运行。")"
+  else
+    log_error "$(l10n "No compatible Linux asset was found for architecture $(uname -m)." "找不到适用于 $(uname -m) 架构的 Linux 发布文件。")"
+  fi
   exit 1
+}
+
+# Runs the freshly extracted binaries once so a release that cannot execute here
+# (glibc too old for the -gnu build, wrong architecture, truncated archive) is
+# reported as such instead of surfacing later as a bogus "unsupported cipher".
+release_binaries_runnable() {
+  local binary
+  local binary_path
+  local probe_output=""
+
+  for binary in ssserver ssservice; do
+    if ! binary_path=$(find_release_binary "${binary}"); then
+      return 1
+    fi
+
+    if ! probe_output=$("${binary_path}" --version 2>&1); then
+      log_warn "$(l10n "The ${binary} binary from ${ASSET_NAME} cannot run on this system." "${ASSET_NAME} 中的 ${binary} 无法在本系统上运行。")"
+      if [[ -n "${probe_output}" ]]; then
+        log_warn "$(l10n "Reason: $(first_line "${probe_output}")" "原因：$(first_line "${probe_output}")")"
+      fi
+      return 1
+    fi
+  done
+
+  return 0
+}
+
+# Picks an asset, downloads it, and keeps falling back to the remaining
+# candidates (musl builds in particular) until one actually executes here.
+prepare_release() {
+  local previous_asset=""
+
+  while true; do
+    previous_asset="${ASSET_NAME}"
+    choose_release_asset
+    download_and_verify_release
+
+    if release_binaries_runnable; then
+      return 0
+    fi
+
+    if [[ "${ASSET_NAME}" == "${previous_asset}" ]]; then
+      log_error "$(l10n "The release binaries from ${ASSET_NAME} cannot run on this system." "${ASSET_NAME} 中的程序无法在本系统上运行。")"
+      exit 1
+    fi
+
+    REJECTED_ASSETS+=("${ASSET_NAME}")
+    log_warn "$(l10n "Trying another release asset for this system." "正在尝试其他适用于本系统的发布文件。")"
+  done
 }
 
 download_and_verify_release() {
   local archive_path
   local checksum_path
+
+  if [[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]]; then
+    rm -rf -- "${TMP_DIR}"
+  fi
 
   TMP_DIR=$(mktemp -d)
   archive_path="${TMP_DIR}/${ASSET_NAME}"
@@ -1330,9 +1407,49 @@ install_binaries() {
   done
 }
 
+# Keeps diagnostics to the first line, since clap dumps the whole list of
+# possible values after it.
+first_line() {
+  printf '%s' "${1%%$'\n'*}"
+}
+
+# Prints whatever ssservice reported on stderr and fails when the cipher method
+# was rejected, so callers can tell a bad method from a broken binary.
+method_genkey_error() {
+  local ssservice_path="$1"
+  local method="$2"
+  local output=""
+  local status=0
+
+  output=$("${ssservice_path}" genkey -m "${method}" 2>&1 >/dev/null) || status=$?
+  printf '%s' "${output}"
+
+  return "${status}"
+}
+
+# True when ssservice itself is usable, i.e. a genkey failure really is about
+# the cipher method rather than a binary that cannot run at all.
+ssservice_genkey_usable() {
+  "${BIN_DIR}/ssservice" genkey --help >/dev/null 2>&1
+}
+
 ensure_supported_method() {
-  while ! "${BIN_DIR}/ssservice" genkey -m "${METHOD}" >/dev/null 2>&1; do
+  local genkey_error=""
+
+  while ! genkey_error=$(method_genkey_error "${BIN_DIR}/ssservice" "${METHOD}"); do
+    if ! ssservice_genkey_usable; then
+      log_error "$(l10n "The installed ssservice cannot run 'genkey' on this system, so no cipher method can be verified." "已安装的 ssservice 无法在本系统上执行 genkey，因此无法校验任何加密方法。")"
+      if [[ -n "${genkey_error}" ]]; then
+        log_error "$(l10n "Reason: $(first_line "${genkey_error}")" "原因：$(first_line "${genkey_error}")")"
+      fi
+      log_error "$(l10n "Reinstall with a release that matches this system, or install a musl build." "请改用与本系统匹配的版本重新安装，或安装 musl 版本。")"
+      exit 1
+    fi
+
     log_warn "$(l10n "The installed ssservice build does not accept method: ${METHOD}" "已安装的 ssservice 不支持加密方法：${METHOD}")"
+    if [[ -n "${genkey_error}" ]]; then
+      log_warn "$(l10n "Reason: $(first_line "${genkey_error}")" "原因：$(first_line "${genkey_error}")")"
+    fi
     METHOD=$(select_method)
   done
 
@@ -2350,6 +2467,22 @@ prompt_listen_address() {
   fi
 }
 
+# Cipher methods the installed ssservice advertises in `genkey --help`. Empty
+# when ssservice is missing or too old to list them, in which case the caller
+# falls back to the full built-in menu.
+installed_methods() {
+  if [[ ! -x "${BIN_DIR}/ssservice" ]]; then
+    return 0
+  fi
+
+  "${BIN_DIR}/ssservice" genkey --help 2>/dev/null \
+    | tr -d '\n' \
+    | sed -nE 's/.*\[possible values:([^]]*)\].*/\1/p' \
+    | tr ',' '\n' \
+    | sed 's/[[:space:]]//g' \
+    | sed '/^$/d'
+}
+
 select_method() {
   local choice=""
   local manual_method=""
@@ -2359,11 +2492,27 @@ select_method() {
   local description=""
   local translations=""
   local manual_option=0
+  local -a menu_methods=()
+  local -a available=()
+
+  mapfile -t available < <(installed_methods)
+
+  menu_methods=()
+  for entry in "${COMMON_METHODS[@]}"; do
+    method=${entry%%|*}
+    if (( ${#available[@]} == 0 )) || printf '%s\n' "${available[@]}" | grep -qxF "${method}"; then
+      menu_methods+=("${entry}")
+    fi
+  done
+
+  if (( ${#menu_methods[@]} == 0 )); then
+    menu_methods=("${COMMON_METHODS[@]}")
+  fi
 
   while true; do
     printf '\n%s\n' "$(l10n "Common cipher methods supported by Shadowsocks-rust:" "Shadowsocks-rust 常用加密方法：")" >&2
     index=1
-    for entry in "${COMMON_METHODS[@]}"; do
+    for entry in "${menu_methods[@]}"; do
       method=${entry%%|*}
       translations=${entry#*|}
       description=${translations%%|*}
@@ -2381,7 +2530,7 @@ select_method() {
 
     if [[ "${choice}" =~ ^[0-9]+$ ]]; then
       if (( choice >= 1 && choice < manual_option )); then
-        printf '%s' "${COMMON_METHODS[choice-1]%%|*}"
+        printf '%s' "${menu_methods[choice-1]%%|*}"
         return 0
       fi
 

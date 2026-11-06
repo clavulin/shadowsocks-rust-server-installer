@@ -47,4 +47,43 @@ choose_release_asset >/dev/null
 [[ "${SHA256_URL}" == "${ASSET_URL}.sha256" ]] || \
   fail "unexpected checksum URL '${SHA256_URL}'"
 
+# An asset whose binaries cannot execute here must be skipped in favour of the
+# next candidate instead of being installed and failing later.
+asset_candidates() {
+  printf '%s\n' \
+    'shadowsocks-v-test.broken.tar.xz' \
+    'shadowsocks-v-test.runnable.tar.xz'
+}
+
+asset_url_from_release() {
+  printf 'https://example.invalid/%s' "$1"
+}
+
+download_and_verify_release() {
+  local binary
+
+  if [[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]]; then
+    rm -rf -- "${TMP_DIR}"
+  fi
+  TMP_DIR=$(mktemp -d)
+
+  for binary in ssserver ssservice; do
+    if [[ "${ASSET_NAME}" == *runnable* ]]; then
+      printf '#!/bin/sh\nexit 0\n' >"${TMP_DIR}/${binary}"
+    else
+      printf '#!/bin/sh\necho "libc.so.6: version GLIBC_2.34 not found" >&2\nexit 1\n' \
+        >"${TMP_DIR}/${binary}"
+    fi
+    chmod 0755 "${TMP_DIR}/${binary}"
+  done
+}
+
+TMP_DIR=""
+prepare_release >/dev/null 2>&1
+
+[[ "${ASSET_NAME}" == 'shadowsocks-v-test.runnable.tar.xz' ]] || \
+  fail "expected the runnable asset, got '${ASSET_NAME}'"
+
+rm -rf -- "${TMP_DIR}"
+
 printf 'release regression passed\n'
