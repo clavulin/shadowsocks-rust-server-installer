@@ -2463,13 +2463,25 @@ url_encode() {
 
 detect_public_ip() {
   local ip=""
+  local family
+  local url
+  local -a urls=(
+    https://api.ipify.org
+    https://ifconfig.me/ip
+    https://icanhazip.com
+    https://checkip.amazonaws.com
+  )
 
-  ip=$(curl -4fsS --max-time 5 https://api64.ipify.org 2>/dev/null || true)
-  if [[ -z "${ip}" ]]; then
-    ip=$(curl -6fsS --max-time 5 https://api64.ipify.org 2>/dev/null || true)
-  fi
-
-  printf '%s' "${ip}"
+  for family in 4 6; do
+    for url in "${urls[@]}"; do
+      ip=$(curl "-${family}fsS" --connect-timeout 3 --max-time 5 "${url}" 2>/dev/null | tr -d '[:space:]' || true)
+      if [[ "${family}" == 4 && "${ip}" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] ||
+        [[ "${family}" == 6 && "${ip}" =~ ^[0-9A-Fa-f:]+$ && "${ip}" == *:* ]]; then
+        printf '%s' "${ip}"
+        return 0
+      fi
+    done
+  done
 }
 
 build_ss_uri() {
